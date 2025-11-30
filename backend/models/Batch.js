@@ -7,6 +7,7 @@ const batchSchema = new mongoose.Schema(
     metadataURI: { type: String },
     nftTokenId: { type: Number, unique: true },
     products: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
+    quantity: { type: Number, default: 0 }, // Number of products in the batch
     createdAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

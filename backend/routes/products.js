@@ -9,33 +9,29 @@ const { ethers } = require('ethers');
 // In production, use a proper ZK library and compiled circuits
 async function generateBatchMembershipProof(productId, batchId, secret) {
   try {
-    // For now, create a mock proof structure
-    // In production, compile the circuit and generate real proofs
-    const { poseidon } = require('circomlib');
-    
-    // Calculate product hash: hash(productId, secret)
-    // Note: This requires BigInt conversion
-    const productHash = poseidon([BigInt(productId), BigInt(secret)]);
+    // Use ethers keccak256 for hashing (more reliable than circomlib)
+    const secretHash = ethers.keccak256(ethers.toUtf8Bytes(`${productId}-${batchId}-${secret}`));
+    const productHash = ethers.keccak256(ethers.toUtf8Bytes(`${productId}-${secretHash}`));
     
     // Create public signals
-    const publicSignals = [BigInt(batchId), productHash];
+    const publicSignals = [batchId.toString(), productHash];
     
-    // Mock proof (in production, generate actual proof from circuit)
+    // Mock proof structure (in production, generate actual proof from circuit)
     const proof = {
       a: ["0", "0"],
       b: [["0", "0"], ["0", "0"]],
       c: ["0", "0"],
-      publicSignals: publicSignals.map(s => s.toString())
+      publicSignals: publicSignals
     };
     
     return {
       proof,
-      publicSignals: publicSignals.map(s => s.toString()),
-      productHash: productHash.toString()
+      publicSignals,
+      productHash
     };
   } catch (error) {
     console.error("Error generating proof:", error);
-    // Return mock proof if circomlib is not available
+    // Return mock proof on error
     return {
       proof: {
         a: ["0", "0"],
@@ -69,8 +65,40 @@ let signer = null;
 let contract = null;
 const contractAddress = process.env.CONTRACT_ADDRESS;
 
-async function getEthersBindings() {
-  if (contract) return { provider, signer, contract };
+// Helper to get signer for a specific address (for Hardhat local dev)
+async function getSignerForAddress(provider, address) {
+  const rpcUrl = process.env.POLYGON_RPC_URL || 'http://127.0.0.1:8545';
+  const isLocal = rpcUrl.toLowerCase().includes('127.0.0.1') || rpcUrl.toLowerCase().includes('localhost');
+  
+  if (isLocal) {
+    // For Hardhat local, try to impersonate the address
+    try {
+      // Impersonate the account (Hardhat feature)
+      await provider.send('hardhat_impersonateAccount', [address]);
+      // Fund the account if needed (for gas)
+      await provider.send('hardhat_setBalance', [address, '0x1000000000000000000000']); // 1000 ETH
+      return await provider.getSigner(address);
+    } catch (e) {
+      console.log('Could not impersonate account, trying unlocked accounts:', e.message);
+      // Fallback: try to find the address in unlocked accounts
+      for (let i = 0; i < 20; i++) {
+        try {
+          const testSigner = await provider.getSigner(i);
+          const testAddr = await testSigner.getAddress();
+          if (testAddr.toLowerCase() === address.toLowerCase()) {
+            return testSigner;
+          }
+        } catch (_) {
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function getEthersBindings(userWalletAddress = null) {
+  if (contract && !userWalletAddress) return { provider, signer, contract };
 
   const rpcUrl = process.env.POLYGON_RPC_URL || 'http://127.0.0.1:8545';
   provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -83,6 +111,22 @@ async function getEthersBindings() {
   }
 
   const isLocal = rpcUrl.toLowerCase().includes('127.0.0.1') || rpcUrl.toLowerCase().includes('localhost');
+  
+  // If user wallet is provided, try to use that signer (for Hardhat local dev)
+  if (userWalletAddress && isLocal) {
+    const userSigner = await getSignerForAddress(provider, userWalletAddress);
+    if (userSigner) {
+      signer = userSigner;
+      contract = new ethers.Contract(contractAddress, abi, signer);
+      try {
+        const addr = await signer.getAddress();
+        console.log('Using user wallet signer:', addr);
+      } catch (_) {}
+      return { provider, signer, contract };
+    }
+  }
+  
+  // Default: use first unlocked account or PRIVATE_KEY
   if (isLocal) {
     // Hardhat local network – use first unlocked account
     try {
@@ -108,25 +152,25 @@ async function getEthersBindings() {
   return { provider, signer, contract };
 }
 
-// Create product: calls contract and saves Mongo doc
+// Create products with quantity: calls contract and saves Mongo docs
 router.post('/', auth, async (req, res) => {
   try {
     const { contract } = await getEthersBindings();
     const user = await User.findById(req.user.id);
     if (!user || user.role !== 'manufacturer') return res.status(403).json({ error: 'Forbidden' });
-    const { name, description, manufactureDate } = req.body;
+    const { name, description, manufactureDate, quantity = 1 } = req.body;
     if (!contractAddress) return res.status(500).json({ error: 'Contract address missing' });
     if (!contract) return res.status(500).json({ error: 'Contract not configured' });
 
+    const qty = Math.max(1, Math.min(100, parseInt(quantity) || 1)); // Limit to 1-100
     const dateStr = new Date(manufactureDate).toISOString().slice(0, 10);
-    console.log('Creating product:', { name, dateStr, userWallet: user.walletAddress });
+    console.log('Creating products:', { name, quantity: qty, dateStr, userWallet: user.walletAddress });
     
-    // Ensure signer is an authorized manufacturer (owner can set on local)
+    // Ensure signer is an authorized manufacturer
     try {
       const { signer: currentSigner } = await getEthersBindings();
       const signerAddr = await currentSigner.getAddress();
       const isAuth = await contract.authorizedManufacturer(signerAddr);
-      console.log('Signer authorized:', isAuth, signerAddr);
       if (!isAuth) {
         console.log('Authorizing signer...');
         const txAuth = await contract.setManufacturer(signerAddr, true);
@@ -137,28 +181,33 @@ router.post('/', auth, async (req, res) => {
       console.error('Authorization error:', e.message);
     }
     
-    console.log('Calling createProduct...');
-    const tx = await contract.createProduct(name, dateStr);
-    console.log('Transaction sent:', tx.hash);
-    const receipt = await tx.wait();
-    console.log('Transaction confirmed:', receipt.transactionHash);
+    // Create products in batch
+    const createdProducts = [];
+    for (let i = 0; i < qty; i++) {
+      const tx = await contract.createProduct(name, dateStr);
+      const receipt = await tx.wait();
+      const productId = await contract.nextProductId();
+      const blockchainId = Number(productId) - 1;
+      
+      const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify/${blockchainId}`;
+      const qrCodeUrl = await QRCode.toDataURL(verifyUrl);
+
+      const product = await Product.create({
+        blockchainId,
+        name: qty > 1 ? `${name} #${i + 1}` : name,
+        description,
+        manufacturer: user._id,
+        manufactureDate,
+        qrCodeUrl,
+      });
+      createdProducts.push(product);
+    }
     
-    const productId = await contract.nextProductId();
-    const blockchainId = Number(productId) - 1;
-    console.log('Product created with ID:', blockchainId);
-
-    const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify/${blockchainId}`;
-    const qrCodeUrl = await QRCode.toDataURL(verifyUrl);
-
-    const product = await Product.create({
-      blockchainId,
-      name,
-      description,
-      manufacturer: user._id,
-      manufactureDate,
-      qrCodeUrl,
+    res.json({ 
+      message: `Successfully created ${qty} product(s)`,
+      products: createdProducts,
+      count: createdProducts.length
     });
-    res.json(product);
   } catch (e) {
     console.error('Create product error:', e);
     const message = e?.error?.message || e?.shortMessage || e?.message || 'Server error';
@@ -167,11 +216,52 @@ router.post('/', auth, async (req, res) => {
 });
 
 router.get('/', auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  const query = user.role === 'manufacturer' ? { manufacturer: user._id } : {};
-  const list = await Product.find(query).sort({ createdAt: -1 }).limit(100);
-  res.json(list);
+  try {
+    const { contract } = await getEthersBindings();
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Get all products from database
+    let query = {};
+    if (user.role === 'manufacturer') {
+      query = { manufacturer: user._id };
+    }
+    
+    const allProducts = await Product.find(query).sort({ createdAt: -1 }).limit(500);
+    
+    // Filter by blockchain currentHolder - only show products owned by this user
+    if (!contract) {
+      return res.json([]); // Return empty if contract not configured
+    }
+    
+    const userWallet = user.walletAddress.toLowerCase();
+    const filteredProducts = [];
+    
+    for (const product of allProducts) {
+      try {
+        const result = await contract.getProduct(product.blockchainId);
+        const currentHolder = result[1]?.toLowerCase();
+        
+        // Show product if:
+        // 1. User is manufacturer (they created it) OR
+        // 2. User is current holder on blockchain
+        if (user.role === 'manufacturer' || currentHolder === userWallet) {
+          filteredProducts.push(product);
+        }
+      } catch (e) {
+        console.error(`Error checking product ${product.blockchainId}:`, e.message);
+        // If can't check blockchain, only show to manufacturer
+        if (user.role === 'manufacturer') {
+          filteredProducts.push(product);
+        }
+      }
+    }
+    
+    res.json(filteredProducts);
+  } catch (e) {
+    console.error('Error fetching products:', e);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
 });
 
 router.get('/:id/qrcode', async (req, res) => {
@@ -209,19 +299,73 @@ router.get('/test-contract', async (req, res) => {
   }
 });
 
-// Transfer product on-chain
+// Transfer products on-chain (supports quantity)
 router.post('/:id/transfer', auth, async (req, res) => {
   try {
     const { contract } = await getEthersBindings();
-    const { toAddress, location } = req.body;
+    const { toAddress, location, quantity = 1 } = req.body;
     const productId = Number(req.params.id);
     if (!contract) return res.status(500).json({ error: 'Contract not configured' });
-    const tx = await contract.transferProduct(productId, toAddress, location || '');
-    const receipt = await tx.wait();
-    res.json({ txHash: receipt.transactionHash });
+    
+    // Verify product exists and get manufacturer info
+    const result = await contract.getProduct(productId);
+    const manufacturer = result[0];
+    const currentHolder = result[1];
+    const user = await User.findById(req.user.id);
+    
+    // Verify user is current holder
+    if (currentHolder.toLowerCase() !== user.walletAddress.toLowerCase()) {
+      return res.status(403).json({ error: 'You are not the current holder of this product' });
+    }
+    
+    // Get manufacturer details
+    const manufacturerUser = await User.findOne({ walletAddress: manufacturer.toLowerCase() });
+    const manufacturerInfo = manufacturerUser ? {
+      name: manufacturerUser.name,
+      companyName: manufacturerUser.companyName,
+      address: manufacturer
+    } : { address: manufacturer };
+    
+    // Transfer products (if quantity > 1, transfer multiple consecutive IDs)
+    const qty = Math.max(1, Math.min(50, parseInt(quantity) || 1));
+    const transfers = [];
+    
+    for (let i = 0; i < qty; i++) {
+      const currentProductId = productId + i;
+      try {
+        // Verify this product exists and is owned by user
+        const prodResult = await contract.getProduct(currentProductId);
+        if (prodResult[1].toLowerCase() !== user.walletAddress.toLowerCase()) {
+          break; // Stop if we hit a product not owned by user
+        }
+        
+        const tx = await contract.transferProduct(currentProductId, toAddress, location || '');
+        const receipt = await tx.wait();
+        transfers.push({
+          productId: currentProductId,
+          txHash: receipt.transactionHash
+        });
+      } catch (e) {
+        console.error(`Error transferring product ${currentProductId}:`, e.message);
+        break;
+      }
+    }
+    
+    if (transfers.length === 0) {
+      return res.status(400).json({ error: 'Transfer failed - no products transferred' });
+    }
+    
+    res.json({ 
+      message: `Successfully transferred ${transfers.length} product(s)`,
+      transfers,
+      manufacturer: manufacturerInfo,
+      toAddress,
+      location: location || ''
+    });
   } catch (e) {
-    console.error(e);
-    res.status(400).json({ error: 'Transfer failed' });
+    console.error('Transfer error:', e);
+    const message = e?.error?.message || e?.shortMessage || e?.message || 'Transfer failed';
+    res.status(400).json({ error: message });
   }
 });
 
@@ -300,14 +444,31 @@ router.post('/batch', auth, async (req, res) => {
     if (!user || user.role !== 'manufacturer') return res.status(403).json({ error: 'Forbidden' });
     if (!contract) return res.status(500).json({ error: 'Contract not configured' });
 
-    const { metadataURI, products } = req.body;
-    if (!products || !Array.isArray(products) || products.length === 0) {
-      return res.status(400).json({ error: 'Products array required' });
+    const { metadataURI, products, quantity } = req.body;
+    
+    // Support both array of products and quantity-based creation
+    let productList = [];
+    if (quantity && quantity > 1 && products && products.length > 0) {
+      // If quantity is provided, duplicate the first product N times
+      const template = products[0];
+      const qty = Math.max(1, Math.min(100, parseInt(quantity) || 1));
+      for (let i = 0; i < qty; i++) {
+        productList.push({
+          name: qty > 1 ? `${template.name || 'Product'} #${i + 1}` : (template.name || 'Product'),
+          description: template.description || '',
+          manufactureDate: template.manufactureDate || new Date().toISOString().slice(0, 10)
+        });
+      }
+    } else if (products && Array.isArray(products) && products.length > 0) {
+      // Use provided products array
+      productList = products;
+    } else {
+      return res.status(400).json({ error: 'Products array or quantity required' });
     }
 
     // Prepare product data for contract
-    const productNames = products.map(p => p.name || '');
-    const manufactureDates = products.map(p => 
+    const productNames = productList.map(p => p.name || '');
+    const manufactureDates = productList.map(p => 
       p.manufactureDate ? new Date(p.manufactureDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)
     );
 
@@ -347,13 +508,17 @@ router.post('/batch', auth, async (req, res) => {
       nftTokenId: batchId, // NFT token ID = batch ID
     });
 
-    // Create product documents in MongoDB
+    // Create product documents in MongoDB and generate ZK proofs (MANDATORY)
     const createdProducts = [];
-    for (let i = 0; i < products.length; i++) {
+    for (let i = 0; i < productList.length; i++) {
       const blockchainId = Number(productIds[i]);
-      const product = products[i];
+      const product = productList[i];
       const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify/${blockchainId}`;
       const qrCodeUrl = await QRCode.toDataURL(verifyUrl);
+
+      // Generate ZK proof for each product (MANDATORY for batch products)
+      const secret = ethers.keccak256(ethers.toUtf8Bytes(`secret-${blockchainId}-${batchId}-${Date.now()}`));
+      const proofData = await generateBatchMembershipProof(blockchainId, batchId, secret);
 
       const productDoc = await Product.create({
         blockchainId,
@@ -364,13 +529,17 @@ router.post('/batch', auth, async (req, res) => {
         batchBlockchainId: batchId,
         manufactureDate: product.manufactureDate || new Date(),
         qrCodeUrl,
+        zkProof: proofData,
+        zkProofGenerated: true,
+        zkProofGeneratedAt: new Date(),
       });
 
       createdProducts.push(productDoc);
     }
 
-    // Update batch with product references
+    // Update batch with product references and quantity
     batchDoc.products = createdProducts.map(p => p._id);
+    batchDoc.quantity = createdProducts.length;
     await batchDoc.save();
 
     res.json({
@@ -386,17 +555,59 @@ router.post('/batch', auth, async (req, res) => {
   }
 });
 
-// Get all batches for a manufacturer
+// Get all batches for a manufacturer or batches where user owns all products
 router.get('/batch/list', auth, async (req, res) => {
   try {
+    const { contract } = await getEthersBindings();
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     
-    const query = user.role === 'manufacturer' ? { manufacturer: user._id } : {};
-    const batches = await Batch.find(query)
-      .populate('manufacturer', 'name companyName')
-      .populate('products')
-      .sort({ createdAt: -1 });
+    let batches = [];
+    if (user.role === 'manufacturer') {
+      // Manufacturers see all their batches
+      batches = await Batch.find({ manufacturer: user._id })
+        .populate('manufacturer', 'name companyName')
+        .populate('products')
+        .sort({ createdAt: -1 });
+    } else {
+      // For other roles, check blockchain ownership
+      if (!contract) {
+        return res.json([]); // Return empty if contract not configured
+      }
+      
+      // Get all batches from database
+      const allBatches = await Batch.find()
+        .populate('manufacturer', 'name companyName')
+        .populate('products')
+        .sort({ createdAt: -1 });
+      
+      const userWallet = user.walletAddress.toLowerCase();
+      
+      // Filter batches where user owns all products
+      for (const batch of allBatches) {
+        if (!batch.products || batch.products.length === 0) continue;
+        
+        let ownsAll = true;
+        for (const product of batch.products) {
+          try {
+            const prodResult = await contract.getProduct(product.blockchainId);
+            const currentHolder = prodResult[1]?.toLowerCase();
+            if (currentHolder !== userWallet) {
+              ownsAll = false;
+              break;
+            }
+          } catch (e) {
+            console.error(`Error checking product ${product.blockchainId}:`, e.message);
+            ownsAll = false;
+            break;
+          }
+        }
+        
+        if (ownsAll) {
+          batches.push(batch);
+        }
+      }
+    }
     
     res.json(batches);
   } catch (e) {
@@ -438,7 +649,7 @@ router.get('/batch/:batchId', async (req, res) => {
   }
 });
 
-// Generate ZK proof for product batch membership
+// Generate ZK proof for product batch membership (MANDATORY)
 router.post('/:id/zk-proof', auth, async (req, res) => {
   try {
     const { contract } = await getEthersBindings();
@@ -456,19 +667,21 @@ router.post('/:id/zk-proof', auth, async (req, res) => {
     const batchId = result[5] || 0;
     
     if (!batchId || Number(batchId) === 0) {
-      return res.status(400).json({ error: 'Product is not part of a batch' });
+      return res.status(400).json({ error: 'Product is not part of a batch. ZK proof requires batch membership.' });
     }
     
-    // Generate secret (in production, this should be securely stored per manufacturer)
-    const secret = req.body.secret || ethers.keccak256(ethers.toUtf8Bytes(`secret-${productId}-${batchId}`));
+    // Generate secret using product and batch info
+    const secret = req.body.secret || ethers.keccak256(ethers.toUtf8Bytes(`secret-${productId}-${batchId}-${Date.now()}`));
     
     // Generate ZK proof
     const proofData = await generateBatchMembershipProof(productId, Number(batchId), secret);
     
-    // Save proof to product document
+    // Save proof to product document (MANDATORY)
     const product = await Product.findOne({ blockchainId: productId });
     if (product) {
       product.zkProof = proofData;
+      product.zkProofGenerated = true;
+      product.zkProofGeneratedAt = new Date();
       await product.save();
     }
     
@@ -476,11 +689,12 @@ router.post('/:id/zk-proof', auth, async (req, res) => {
       productId,
       batchId: Number(batchId),
       proof: proofData.proof,
-      publicSignals: proofData.publicSignals
+      publicSignals: proofData.publicSignals,
+      message: 'ZK proof generated successfully and saved'
     });
   } catch (e) {
     console.error('Error generating ZK proof:', e);
-    res.status(500).json({ error: 'Failed to generate proof' });
+    res.status(500).json({ error: 'Failed to generate proof: ' + e.message });
   }
 });
 
@@ -515,6 +729,129 @@ router.post('/:id/zk-verify', async (req, res) => {
   } catch (e) {
     console.error('Error verifying ZK proof:', e);
     const message = e?.error?.message || e?.shortMessage || e?.message || 'Verification failed';
+    res.status(400).json({ error: message });
+  }
+});
+
+// Transfer entire batch (all products in batch)
+router.post('/batch/:batchId/transfer', auth, async (req, res) => {
+  try {
+    const { toAddress, location } = req.body;
+    const batchId = Number(req.params.batchId);
+    
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Get ethers bindings with user's wallet (for Hardhat local dev)
+    const { contract, signer } = await getEthersBindings(user.walletAddress);
+    if (!contract) return res.status(500).json({ error: 'Contract not configured' });
+    if (!signer) return res.status(500).json({ error: 'No signer available' });
+    
+    // Get batch info from blockchain - use destructuring like other endpoints
+    const [manufacturer, metadataURI, createdAt, productIds, nftOwner] = await contract.getBatch(batchId);
+    
+    if (!productIds || productIds.length === 0) {
+      return res.status(400).json({ error: 'Batch has no products' });
+    }
+    
+    // Verify user owns all products in the batch
+    const userWallet = user.walletAddress.toLowerCase();
+    const ownedProducts = [];
+    
+    for (const productId of productIds) {
+      try {
+        const prodResult = await contract.getProduct(Number(productId));
+        const currentHolder = prodResult[1]?.toLowerCase();
+        
+        if (currentHolder === userWallet) {
+          ownedProducts.push(Number(productId));
+        } else {
+          return res.status(403).json({ 
+            error: `You are not the current holder of product ${productId} in this batch. Current holder: ${currentHolder}, Your wallet: ${userWallet}` 
+          });
+        }
+      } catch (e) {
+        console.error(`Error checking product ${productId}:`, e.message);
+        return res.status(400).json({ error: `Failed to verify product ${productId}` });
+      }
+    }
+    
+    // Verify signer matches user wallet (should be true after getEthersBindings with user wallet)
+    const signerAddress = (await signer.getAddress()).toLowerCase();
+    if (signerAddress !== userWallet) {
+      return res.status(403).json({ 
+        error: `Signer mismatch: Backend signer (${signerAddress}) does not match your wallet (${userWallet}). For Hardhat local development, ensure your wallet address is one of the unlocked accounts or use account impersonation.` 
+      });
+    }
+    
+    // Transfer all products in the batch sequentially
+    const transfers = [];
+    let failedProductId = null;
+    let failedError = null;
+    
+    for (const productId of ownedProducts) {
+      try {
+        // Double-check ownership before each transfer
+        const prodCheck = await contract.getProduct(productId);
+        const currentHolder = prodCheck[1]?.toLowerCase();
+        if (currentHolder !== userWallet) {
+          failedProductId = productId;
+          failedError = `Product ${productId} is no longer owned by ${userWallet}. Current holder: ${currentHolder}`;
+          break;
+        }
+        
+        const tx = await contract.transferProduct(productId, toAddress, location || '');
+        const receipt = await tx.wait();
+        transfers.push({
+          productId,
+          txHash: receipt.transactionHash
+        });
+      } catch (e) {
+        console.error(`Error transferring product ${productId}:`, e.message);
+        failedProductId = productId;
+        failedError = e?.error?.message || e?.shortMessage || e?.message || 'Unknown error';
+        break;
+      }
+    }
+    
+    // If some transfers failed, return partial success or error
+    if (failedProductId && transfers.length === 0) {
+      return res.status(400).json({ 
+        error: `Failed to transfer product ${failedProductId}: ${failedError}` 
+      });
+    }
+    
+    if (failedProductId && transfers.length > 0) {
+      return res.status(207).json({ 
+        message: `Partially transferred: ${transfers.length} of ${ownedProducts.length} products transferred`,
+        error: `Failed at product ${failedProductId}: ${failedError}`,
+        batchId,
+        transfers,
+        manufacturer: manufacturerInfo,
+        toAddress,
+        location: location || ''
+      });
+    }
+    
+    // Get manufacturer info (already destructured above)
+    const manufacturerUser = await User.findOne({ walletAddress: manufacturer.toLowerCase() });
+    const manufacturerInfo = manufacturerUser ? {
+      name: manufacturerUser.name,
+      companyName: manufacturerUser.companyName,
+      address: manufacturer
+    } : { address: manufacturer };
+    
+    res.json({ 
+      message: `Successfully transferred entire batch (${transfers.length} products)`,
+      batchId,
+      transfers,
+      manufacturer: manufacturerInfo,
+      toAddress,
+      location: location || ''
+    });
+  } catch (e) {
+    console.error('Batch transfer error:', e);
+    const message = e?.error?.message || e?.shortMessage || e?.message || 'Batch transfer failed';
     res.status(400).json({ error: message });
   }
 });

@@ -7,6 +7,7 @@ import DistributorDashboard from './pages/DistributorDashboard'
 import WarehouseDashboard from './pages/WarehouseDashboard'
 import RetailerDashboard from './pages/RetailerDashboard'
 import VerifyProduct from './pages/VerifyProduct'
+import TestQRCode from './pages/TestQRCode'
 import './App.css'
 
 function PrivateRoute({ children }) {
@@ -21,6 +22,7 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/verify/:productId?" element={<VerifyProduct />} />
+      <Route path="/test-qr/:productId?" element={<TestQRCode />} />
       
       {/* Protected Routes */}
       <Route 

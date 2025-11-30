@@ -6,14 +6,22 @@ export default function ManufacturerDashboard() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [date, setDate] = useState('')
+  const [quantity, setQuantity] = useState(1)
   const [products, setProducts] = useState([])
   const [batches, setBatches] = useState([])
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('single')
   const [batchProducts, setBatchProducts] = useState([{ name: '', description: '', manufactureDate: '' }])
   const [batchMetadataURI, setBatchMetadataURI] = useState('')
+  const [batchQuantity, setBatchQuantity] = useState(1)
   const [batchLoading, setBatchLoading] = useState(false)
   const [success, setSuccess] = useState('')
+  const [transferBatchData, setTransferBatchData] = useState({
+    batchId: '',
+    toAddress: '',
+    location: ''
+  })
+  const [transferBatchLoading, setTransferBatchLoading] = useState(false)
   const token = localStorage.getItem('token')
 
   async function fetchProducts() {
@@ -51,12 +59,18 @@ export default function ManufacturerDashboard() {
     setSuccess('')
     try {
       const { data } = await axios.post(import.meta.env.VITE_API_URL + '/api/products', {
-        name, description, manufactureDate: date
+        name, description, manufactureDate: date, quantity: parseInt(quantity) || 1
       }, { headers: { Authorization: 'Bearer ' + token } })
-      setName(''); setDescription(''); setDate('')
-      setProducts([data, ...products])
-      setSuccess('Product created successfully!')
-      setTimeout(() => setSuccess(''), 3000)
+      setName(''); setDescription(''); setDate(''); setQuantity(1)
+      if (data.products && Array.isArray(data.products)) {
+        setProducts([...data.products, ...products])
+        setSuccess(`Successfully created ${data.count} product(s)!`)
+      } else {
+        setProducts([data, ...products])
+        setSuccess('Product created successfully!')
+      }
+      setTimeout(() => setSuccess(''), 5000)
+      fetchProducts()
     } catch (e) {
       alert('Failed to create: ' + (e.response?.data?.error || e.message))
     } finally {
@@ -92,6 +106,9 @@ export default function ManufacturerDashboard() {
       return
     }
 
+    const quantity = parseInt(batchQuantity) || 1
+    const useQuantity = quantity > 1
+
     try {
       const { data } = await axios.post(import.meta.env.VITE_API_URL + '/api/products/batch', {
         metadataURI: batchMetadataURI || `ipfs://batch-${Date.now()}`,
@@ -99,12 +116,14 @@ export default function ManufacturerDashboard() {
           name: p.name,
           description: p.description || '',
           manufactureDate: p.manufactureDate || new Date().toISOString().slice(0, 10)
-        }))
+        })),
+        quantity: useQuantity ? quantity : undefined
       }, { headers: { Authorization: 'Bearer ' + token } })
       
       setBatchProducts([{ name: '', description: '', manufactureDate: '' }])
       setBatchMetadataURI('')
-      setSuccess(`Batch created successfully! NFT Token ID: ${data.nftTokenId}`)
+      setBatchQuantity(1)
+      setSuccess(`Batch created successfully! NFT Token ID: ${data.nftTokenId}${useQuantity ? ` (${quantity} products)` : ''}`)
       setTimeout(() => setSuccess(''), 5000)
       fetchProducts()
       fetchBatches()
@@ -128,6 +147,40 @@ export default function ManufacturerDashboard() {
       fetchProducts()
     } catch (e) {
       alert('Failed to generate ZK proof: ' + (e.response?.data?.error || e.message))
+    }
+  }
+
+  async function handleBatchTransfer(e) {
+    e.preventDefault()
+    if (!transferBatchData.batchId || !transferBatchData.toAddress) {
+      alert('Please fill in batch ID and recipient address')
+      return
+    }
+
+    if (!confirm(`Transfer entire batch ${transferBatchData.batchId}? This will transfer all products in the batch.`)) {
+      return
+    }
+
+    setTransferBatchLoading(true)
+    setSuccess('')
+    try {
+      const { data } = await axios.post(
+        `${import.meta.env.VITE_API_URL}/api/products/batch/${transferBatchData.batchId}/transfer`,
+        { 
+          toAddress: transferBatchData.toAddress, 
+          location: transferBatchData.location
+        },
+        { headers: { Authorization: 'Bearer ' + token } }
+      )
+      setSuccess(data.message || 'Batch transferred successfully!')
+      setTransferBatchData({ batchId: '', toAddress: '', location: '' })
+      setTimeout(() => setSuccess(''), 10000)
+      fetchProducts()
+      fetchBatches()
+    } catch (e) {
+      alert('Batch transfer failed: ' + (e.response?.data?.error || e.message))
+    } finally {
+      setTransferBatchLoading(false)
     }
   }
 
@@ -179,7 +232,7 @@ export default function ManufacturerDashboard() {
             <div className="bg-surface rounded-lg border border-border p-6">
               <h2 className="text-lg font-semibold text-text mb-4">Create New Product</h2>
               <form onSubmit={createProduct} className="space-y-4">
-                <div className="grid md:grid-cols-3 gap-4">
+                <div className="grid md:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-text mb-1.5">Product Name</label>
                     <input 
@@ -209,12 +262,24 @@ export default function ManufacturerDashboard() {
                       required
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Quantity</label>
+                    <input 
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text"
+                      type="number" 
+                      min="1" 
+                      max="100"
+                      value={quantity} 
+                      onChange={e=>setQuantity(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))} 
+                      required
+                    />
+                  </div>
                 </div>
                 <button 
                   className="bg-primary text-white px-6 py-2 rounded-md font-medium hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   disabled={loading}
                 >
-                  {loading ? 'Creating...' : 'Create Product'}
+                  {loading ? 'Creating...' : `Create ${quantity} Product(s)`}
                 </button>
               </form>
             </div>
@@ -231,8 +296,8 @@ export default function ManufacturerDashboard() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Name</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Batch</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">ZK Proof</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">QR Code</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -257,20 +322,32 @@ export default function ManufacturerDashboard() {
                             )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            {p.qrCodeUrl ? (
-                              <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
+                            {p.zkProofGenerated ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-success border border-green-200">
+                                ✓ Generated
+                              </span>
+                            ) : p.batchBlockchainId ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-200">
+                                Required
+                              </span>
                             ) : (
                               <span className="text-text-light text-sm">—</span>
                             )}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            {p.batchBlockchainId && (
-                              <button
-                                onClick={() => generateZKProof(p.blockchainId, p.batchBlockchainId)}
-                                className="text-primary hover:text-secondary font-medium"
-                              >
-                                Generate ZK Proof
-                              </button>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            {p.qrCodeUrl ? (
+                              <div className="flex items-center gap-2">
+                                <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
+                                <a
+                                  href={`/test-qr/${p.blockchainId}`}
+                                  className="text-xs text-primary hover:text-secondary font-medium"
+                                  title="Test QR Code"
+                                >
+                                  Test
+                                </a>
+                              </div>
+                            ) : (
+                              <span className="text-text-light text-sm">—</span>
                             )}
                           </td>
                         </tr>
@@ -289,15 +366,30 @@ export default function ManufacturerDashboard() {
             <div className="bg-surface rounded-lg border border-border p-6">
               <h2 className="text-lg font-semibold text-text mb-4">Create Batch with NFT</h2>
               <form onSubmit={createBatch} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1.5">Batch Metadata URI (Optional)</label>
-                  <input
-                    className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text font-mono text-sm"
-                    placeholder="ipfs://... or https://..."
-                    value={batchMetadataURI}
-                    onChange={e => setBatchMetadataURI(e.target.value)}
-                  />
-                  <p className="mt-1 text-xs text-text-light">Leave empty for auto-generated URI</p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Batch Metadata URI (Optional)</label>
+                    <input
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text font-mono text-sm"
+                      placeholder="ipfs://... or https://..."
+                      value={batchMetadataURI}
+                      onChange={e => setBatchMetadataURI(e.target.value)}
+                    />
+                    <p className="mt-1 text-xs text-text-light">Leave empty for auto-generated URI</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Quantity (Optional)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text"
+                      placeholder="1"
+                      value={batchQuantity}
+                      onChange={e => setBatchQuantity(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+                    />
+                    <p className="mt-1 text-xs text-text-light">Create N products with same details from first product</p>
+                  </div>
                 </div>
 
                 <div>
@@ -371,6 +463,54 @@ export default function ManufacturerDashboard() {
               </form>
             </div>
 
+            {/* Batch Transfer Form */}
+            <div className="bg-surface rounded-lg border border-border p-6">
+              <h2 className="text-lg font-semibold text-text mb-4">Transfer Entire Batch</h2>
+              <form onSubmit={handleBatchTransfer} className="space-y-4">
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Batch ID</label>
+                    <input
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text font-mono text-sm"
+                      placeholder="Batch ID"
+                      value={transferBatchData.batchId}
+                      onChange={e => setTransferBatchData({...transferBatchData, batchId: e.target.value})}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Recipient Address</label>
+                    <input
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text font-mono text-sm"
+                      placeholder="0x..."
+                      value={transferBatchData.toAddress}
+                      onChange={e => setTransferBatchData({...transferBatchData, toAddress: e.target.value})}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1.5">Location (Optional)</label>
+                    <input
+                      className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary bg-surface text-text"
+                      placeholder="Destination location"
+                      value={transferBatchData.location}
+                      onChange={e => setTransferBatchData({...transferBatchData, location: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={transferBatchLoading}
+                  className="bg-primary text-white px-6 py-2 rounded-md font-medium hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {transferBatchLoading ? 'Transferring Batch...' : 'Transfer Entire Batch'}
+                </button>
+                <p className="text-xs text-text-light">
+                  This will transfer all products in the batch to the recipient address
+                </p>
+              </form>
+            </div>
+
             {/* Batches Table */}
             <div className="bg-surface rounded-lg border border-border overflow-hidden">
               <div className="px-6 py-4 border-b border-border">
@@ -382,6 +522,7 @@ export default function ManufacturerDashboard() {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Batch ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">NFT Token ID</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Quantity</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Products</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Created</th>
                     </tr>
@@ -389,7 +530,7 @@ export default function ManufacturerDashboard() {
                   <tbody className="divide-y divide-border">
                     {batches.length === 0 ? (
                       <tr>
-                        <td colSpan="4" className="px-6 py-8 text-center text-text-light">
+                        <td colSpan="5" className="px-6 py-8 text-center text-text-light">
                           No batches yet. Create your first batch above.
                         </td>
                       </tr>
@@ -402,6 +543,7 @@ export default function ManufacturerDashboard() {
                               NFT #{batch.nftTokenId}
                             </span>
                           </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-text font-semibold">{batch.quantity || batch.products?.length || 0}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{batch.products?.length || 0} products</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text-light">
                             {new Date(batch.createdAt).toLocaleDateString()}

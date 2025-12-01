@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import Layout from '../components/Layout'
+import PartnershipManager from '../components/PartnershipManager'
+import QRAccessManager from '../components/QRAccessManager'
 
 export default function ManufacturerDashboard() {
   const [name, setName] = useState('')
@@ -223,6 +225,26 @@ export default function ManufacturerDashboard() {
             >
               Create Batch (NFT)
             </button>
+            <button
+              onClick={() => setActiveTab('partnerships')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'partnerships'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              Partnerships
+            </button>
+            <button
+              onClick={() => setActiveTab('qr-access')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'qr-access'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              QR Access
+            </button>
           </nav>
         </div>
 
@@ -310,7 +332,7 @@ export default function ManufacturerDashboard() {
                     ) : (
                       products.map(p => (
                         <tr key={p._id} className="hover:bg-bg transition-colors">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.blockchainId}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.uniqueProductId || p.blockchainId}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{p.name}</td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             {p.batchBlockchainId ? (
@@ -556,6 +578,16 @@ export default function ManufacturerDashboard() {
               </div>
             </div>
           </>
+        )}
+
+        {/* Partnerships Tab */}
+        {activeTab === 'partnerships' && (
+          <PartnershipManager />
+        )}
+
+        {/* QR Access Tab */}
+        {activeTab === 'qr-access' && (
+          <QRAccessManager userRole="manufacturer" />
         )}
       </div>
     </Layout>

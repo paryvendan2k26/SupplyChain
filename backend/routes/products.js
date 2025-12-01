@@ -4,6 +4,7 @@ const QRCode = require('qrcode');
 const Product = require('../models/Product');
 const Batch = require('../models/Batch');
 const User = require('../models/User');
+const Partnership = require('../models/Partnership');
 const { ethers } = require('ethers');
 // ZK Proof generation - simplified for now
 // In production, use a proper ZK library and compiled circuits
@@ -152,6 +153,31 @@ async function getEthersBindings(userWalletAddress = null) {
   return { provider, signer, contract };
 }
 
+// Generate unique product ID: MFR_{manufacturerId}_{timestamp}_{counter}
+async function generateUniqueProductId(manufacturerId) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const count = await Product.countDocuments({ manufacturer: manufacturerId });
+  const counter = String(count + 1).padStart(3, '0');
+  return `MFR_${manufacturerId}_${timestamp}_${counter}`;
+}
+
+// Partnership check middleware (for new products requiring partnership)
+async function checkPartnershipForTransfer(senderId, receiverWalletAddress) {
+  // Find receiver user by wallet address
+  const receiver = await User.findOne({ walletAddress: receiverWalletAddress.toLowerCase() });
+  if (!receiver) return { allowed: false, error: 'Receiver not found in system' };
+  
+  // Check if partnership exists
+  const partnership = await Partnership.findOne({
+    $or: [
+      { sender: senderId, receiver: receiver._id, status: 'accepted' },
+      { sender: receiver._id, receiver: senderId, status: 'accepted' }
+    ]
+  });
+  
+  return { allowed: !!partnership, error: partnership ? null : 'Partnership required. Request partnership first.' };
+}
+
 // Create products with quantity: calls contract and saves Mongo docs
 router.post('/', auth, async (req, res) => {
   try {
@@ -191,14 +217,21 @@ router.post('/', auth, async (req, res) => {
       
       const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify/${blockchainId}`;
       const qrCodeUrl = await QRCode.toDataURL(verifyUrl);
+      
+      // Generate unique product ID for new products
+      const uniqueProductId = await generateUniqueProductId(user._id);
 
       const product = await Product.create({
         blockchainId,
+        uniqueProductId, // NEW: Add unique product ID
         name: qty > 1 ? `${name} #${i + 1}` : name,
         description,
         manufacturer: user._id,
+        currentHolder: user._id, // NEW: Track current holder
         manufactureDate,
         qrCodeUrl,
+        requiresPartnership: true, // NEW: Flag new products as requiring partnership
+        qrVisible: false, // NEW: Default false for new products (backward compat: old products have true)
       });
       createdProducts.push(product);
     }
@@ -264,10 +297,110 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// NEW: Get products grouped by sender
+router.get('/grouped-by-sender', auth, async (req, res) => {
+  try {
+    const { contract } = await getEthersBindings();
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Get all products (same logic as main endpoint)
+    let query = {};
+    if (user.role === 'manufacturer') {
+      query = { manufacturer: user._id };
+    }
+    
+    const allProducts = await Product.find(query).populate('sender manufacturer', 'name companyName role').sort({ createdAt: -1 }).limit(500);
+    
+    if (!contract) {
+      return res.json({}); // Return empty object if contract not configured
+    }
+    
+    const userWallet = user.walletAddress.toLowerCase();
+    const filteredProducts = [];
+    
+    for (const product of allProducts) {
+      try {
+        const result = await contract.getProduct(product.blockchainId);
+        const currentHolder = result[1]?.toLowerCase();
+        
+        if (user.role === 'manufacturer' || currentHolder === userWallet) {
+          filteredProducts.push(product);
+        }
+      } catch (e) {
+        if (user.role === 'manufacturer') {
+          filteredProducts.push(product);
+        }
+      }
+    }
+    
+    // Group by sender
+    const grouped = {};
+    filteredProducts.forEach(product => {
+      const senderId = product.sender?._id?.toString() || product.manufacturer?._id?.toString() || 'unknown';
+      if (!grouped[senderId]) {
+        grouped[senderId] = {
+          sender: product.sender || product.manufacturer,
+          products: []
+        };
+      }
+      grouped[senderId].products.push(product);
+    });
+    
+    res.json(grouped);
+  } catch (e) {
+    console.error('Error fetching grouped products:', e);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
+
+// Get QR code (with access control for new products)
 router.get('/:id/qrcode', async (req, res) => {
-  const p = await Product.findOne({ blockchainId: req.params.id });
-  if (!p) return res.status(404).json({ error: 'Not found' });
-  res.json({ qrCodeUrl: p.qrCodeUrl });
+  try {
+    // Try to find by blockchainId first (backward compatibility)
+    let p = await Product.findOne({ blockchainId: req.params.id });
+    // If not found, try uniqueProductId
+    if (!p) {
+      p = await Product.findOne({ uniqueProductId: req.params.id });
+    }
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    
+    // NEW: Check QR access for protected products
+    // If qrVisible is false, check access
+    if (!p.qrVisible) {
+      // Check if user has access (requires auth)
+      const header = req.headers.authorization || '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+      
+      if (!token) {
+        return res.status(403).json({ error: 'QR code access not granted. Authentication required.' });
+      }
+      
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findById(decoded.id);
+        
+        // Manufacturer always has access to their products
+        if (user && p.manufacturer.toString() === user._id.toString()) {
+          return res.json({ qrCodeUrl: p.qrCodeUrl });
+        }
+        
+        // Check if user is in qrAccessGrantedTo list
+        if (user && p.qrAccessGrantedTo && p.qrAccessGrantedTo.some(id => id.toString() === user._id.toString())) {
+          return res.json({ qrCodeUrl: p.qrCodeUrl });
+        }
+        
+        return res.status(403).json({ error: 'QR code access not granted' });
+      } catch (e) {
+        return res.status(403).json({ error: 'QR code access not granted. Invalid token.' });
+      }
+    }
+    
+    // Backward compatibility: old products with qrVisible: true (or default) are accessible
+    res.json({ qrCodeUrl: p.qrCodeUrl });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
 });
 
 module.exports = router;
@@ -318,6 +451,15 @@ router.post('/:id/transfer', auth, async (req, res) => {
       return res.status(403).json({ error: 'You are not the current holder of this product' });
     }
     
+    // NEW: Check partnership for products requiring it (backward compatible - old products don't require)
+    const dbProduct = await Product.findOne({ blockchainId: productId });
+    if (dbProduct && dbProduct.requiresPartnership) {
+      const partnershipCheck = await checkPartnershipForTransfer(user._id, toAddress);
+      if (!partnershipCheck.allowed) {
+        return res.status(403).json({ error: partnershipCheck.error });
+      }
+    }
+    
     // Get manufacturer details
     const manufacturerUser = await User.findOne({ walletAddress: manufacturer.toLowerCase() });
     const manufacturerInfo = manufacturerUser ? {
@@ -341,6 +483,18 @@ router.post('/:id/transfer', auth, async (req, res) => {
         
         const tx = await contract.transferProduct(currentProductId, toAddress, location || '');
         const receipt = await tx.wait();
+        
+        // NEW: Update product in DB with new holder and sender
+        const dbProd = await Product.findOne({ blockchainId: currentProductId });
+        if (dbProd) {
+          const receiverUser = await User.findOne({ walletAddress: toAddress.toLowerCase() });
+          if (receiverUser) {
+            dbProd.currentHolder = receiverUser._id;
+            dbProd.sender = user._id;
+            await dbProd.save();
+          }
+        }
+        
         transfers.push({
           productId: currentProductId,
           txHash: receipt.transactionHash
@@ -407,6 +561,7 @@ router.get('/:id', async (req, res) => {
       } catch (e) {
         console.error('Error fetching batch info:', e.message);
       }
+
     }
     
     res.json({ 

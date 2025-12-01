@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import Layout from '../components/Layout'
+import PartnershipManager from '../components/PartnershipManager'
+import ProductsBySender from '../components/ProductsBySender'
+import QRAccessManager from '../components/QRAccessManager'
 
 export default function RetailerDashboard() {
   const [products, setProducts] = useState([])
+  const [activeTab, setActiveTab] = useState('inventory')
   const token = localStorage.getItem('token')
 
   useEffect(() => {
@@ -31,6 +35,27 @@ export default function RetailerDashboard() {
           <p className="text-text-light">View inventory and manage product sales</p>
         </div>
 
+        {/* Tabs */}
+        <div className="border-b border-border">
+          <nav className="flex gap-1">
+            <button onClick={() => setActiveTab('inventory')} className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'inventory' ? 'text-primary border-b-2 border-primary' : 'text-text-light hover:text-text'}`}>
+              All Products
+            </button>
+            <button onClick={() => setActiveTab('by-sender')} className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'by-sender' ? 'text-primary border-b-2 border-primary' : 'text-text-light hover:text-text'}`}>
+              By Sender
+            </button>
+            <button onClick={() => setActiveTab('qr-access')} className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'qr-access' ? 'text-primary border-b-2 border-primary' : 'text-text-light hover:text-text'}`}>
+              QR Access
+            </button>
+            <button onClick={() => setActiveTab('partnerships')} className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'partnerships' ? 'text-primary border-b-2 border-primary' : 'text-text-light hover:text-text'}`}>
+              Partnerships
+            </button>
+          </nav>
+        </div>
+
+        {/* Inventory Tab */}
+        {activeTab === 'inventory' && (
+          <>
         {/* Stats */}
         <div className="grid md:grid-cols-3 gap-4">
           <div className="bg-surface rounded-lg border border-border p-6">
@@ -77,7 +102,7 @@ export default function RetailerDashboard() {
                 ) : (
                   products.map(p => (
                     <tr key={p._id} className="hover:bg-bg transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.blockchainId}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.uniqueProductId || p.blockchainId}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{p.name}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {p.batchBlockchainId ? (
@@ -110,6 +135,23 @@ export default function RetailerDashboard() {
             </table>
           </div>
         </div>
+          </>
+        )}
+
+        {/* By Sender Tab */}
+        {activeTab === 'by-sender' && (
+          <ProductsBySender />
+        )}
+
+        {/* QR Access Tab */}
+        {activeTab === 'qr-access' && (
+          <QRAccessManager userRole="retailer" />
+        )}
+
+        {/* Partnerships Tab */}
+        {activeTab === 'partnerships' && (
+          <PartnershipManager />
+        )}
       </div>
     </Layout>
   )

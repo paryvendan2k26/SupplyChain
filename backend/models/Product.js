@@ -15,6 +15,13 @@ const productSchema = new mongoose.Schema(
     zkProof: { type: mongoose.Schema.Types.Mixed }, // Store ZK proof if generated
     zkProofGenerated: { type: Boolean, default: false }, // Track if ZK proof is generated
     zkProofGeneratedAt: { type: Date }, // When ZK proof was generated
+    // NEW FIELDS (backward compatible)
+    uniqueProductId: { type: String, index: true }, // MFR_{manufacturerId}_{timestamp}_{counter}
+    requiresPartnership: { type: Boolean, default: false }, // Flag for new products requiring partnership
+    currentHolder: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Track current holder in DB
+    sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Last sender
+    qrVisible: { type: Boolean, default: true }, // Default true for backward compatibility
+    qrAccessGrantedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users with QR access
   },
   { timestamps: true }
 );

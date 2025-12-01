@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import Layout from '../components/Layout'
+import PartnershipManager from '../components/PartnershipManager'
+import ProductsBySender from '../components/ProductsBySender'
 
 export default function DistributorDashboard() {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState('transfer')
   const [transferData, setTransferData] = useState({
     productId: '',
     toAddress: '',
@@ -121,6 +124,55 @@ export default function DistributorDashboard() {
           <p className="text-text-light">Manage product distribution and transfers</p>
         </div>
 
+        {/* Tabs */}
+        <div className="border-b border-border">
+          <nav className="flex gap-1">
+            <button
+              onClick={() => setActiveTab('transfer')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'transfer'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              Transfer
+            </button>
+            <button
+              onClick={() => setActiveTab('inventory')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'inventory'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              All Products
+            </button>
+            <button
+              onClick={() => setActiveTab('by-sender')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'by-sender'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              By Sender
+            </button>
+            <button
+              onClick={() => setActiveTab('partnerships')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'partnerships'
+                  ? 'text-primary border-b-2 border-primary'
+                  : 'text-text-light hover:text-text'
+              }`}
+            >
+              Partnerships
+            </button>
+          </nav>
+        </div>
+
+        {/* Transfer Tab */}
+        {activeTab === 'transfer' && (
+          <>
         {/* Batch Transfer Form */}
         <div className="bg-surface rounded-lg border border-border p-6">
           <h2 className="text-lg font-semibold text-text mb-4">Transfer Entire Batch</h2>
@@ -269,7 +321,7 @@ export default function DistributorDashboard() {
                 ) : (
                   products.map(p => (
                     <tr key={p._id} className="hover:bg-bg transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.blockchainId}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.uniqueProductId || p.blockchainId}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{p.name}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {p.batchBlockchainId ? (
@@ -294,6 +346,71 @@ export default function DistributorDashboard() {
             </table>
           </div>
         </div>
+          </>
+        )}
+
+        {/* Inventory Tab */}
+        {activeTab === 'inventory' && (
+          <div className="bg-surface rounded-lg border border-border overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <h2 className="text-lg font-semibold text-text">All Products</h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-bg">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">ID</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Name</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Batch</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">QR Code</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {products.length === 0 ? (
+                    <tr>
+                      <td colSpan="4" className="px-6 py-8 text-center text-text-light">
+                        No products in your inventory yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    products.map(p => (
+                      <tr key={p._id} className="hover:bg-bg transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.uniqueProductId || p.blockchainId}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{p.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {p.batchBlockchainId ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-bg text-secondary border border-border">
+                              Batch #{p.batchBlockchainId}
+                            </span>
+                          ) : (
+                            <span className="text-text-light text-sm">—</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {p.qrCodeUrl ? (
+                            <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
+                          ) : (
+                            <span className="text-text-light text-sm">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* By Sender Tab */}
+        {activeTab === 'by-sender' && (
+          <ProductsBySender />
+        )}
+
+        {/* Partnerships Tab */}
+        {activeTab === 'partnerships' && (
+          <PartnershipManager />
+        )}
       </div>
     </Layout>
   )

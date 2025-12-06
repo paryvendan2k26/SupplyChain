@@ -20,8 +20,7 @@ const productSchema = new mongoose.Schema(
     requiresPartnership: { type: Boolean, default: false }, // Flag for new products requiring partnership
     currentHolder: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Track current holder in DB
     sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Last sender
-    qrVisible: { type: Boolean, default: true }, // Default true for backward compatibility
-    qrAccessGrantedTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users with QR access
+    productNumberInBatch: { type: Number }, // Product number within batch (1, 2, 3...)
   },
   { timestamps: true }
 );

@@ -7,7 +7,6 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
 const partnershipRoutes = require('./routes/partnerships');
-const qrAccessRoutes = require('./routes/qr-access');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -18,7 +17,6 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/partnerships', partnershipRoutes);
-app.use('/api/qr-access', qrAccessRoutes);
 
 const PORT = process.env.PORT || 5000;
 mongoose

@@ -324,13 +324,13 @@ export default function WarehouseDashboard() {
                           <span className="text-text-light text-sm">—</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      {/* <td className="px-6 py-4 whitespace-nowrap">
                         {p.qrCodeUrl ? (
                           <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
                         ) : (
                           <span className="text-text-light text-sm">—</span>
                         )}
-                      </td>
+                      </td> */}
                     </tr>
                   ))
                 )}
@@ -378,13 +378,13 @@ export default function WarehouseDashboard() {
                             <span className="text-text-light text-sm">—</span>
                           )}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        {/* <td className="px-6 py-4 whitespace-nowrap">
                           {p.qrCodeUrl ? (
                             <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
                           ) : (
                             <span className="text-text-light text-sm">—</span>
                           )}
-                        </td>
+                        </td> */}
                       </tr>
                     ))
                   )}

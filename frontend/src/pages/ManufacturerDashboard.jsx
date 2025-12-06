@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import Layout from '../components/Layout'
 import PartnershipManager from '../components/PartnershipManager'
-import QRAccessManager from '../components/QRAccessManager'
 
 export default function ManufacturerDashboard() {
   const [name, setName] = useState('')
@@ -186,6 +185,105 @@ export default function ManufacturerDashboard() {
     }
   }
 
+  function printQRCode(product) {
+    const printWindow = window.open('', '_blank')
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>QR Code - ${product.name}</title>
+          <style>
+            @media print {
+              @page { margin: 1cm; }
+              body { font-family: Arial, sans-serif; }
+              .qr-container { text-align: center; page-break-inside: avoid; margin-bottom: 2cm; }
+              .qr-code { max-width: 300px; margin: 0 auto; }
+              .product-name { font-size: 18px; font-weight: bold; margin: 10px 0; }
+              .product-id { font-size: 12px; color: #666; margin: 5px 0; }
+            }
+            body { padding: 20px; }
+            .qr-container { text-align: center; margin-bottom: 30px; }
+            .qr-code { max-width: 300px; margin: 0 auto; }
+            .product-name { font-size: 18px; font-weight: bold; margin: 10px 0; }
+            .product-id { font-size: 12px; color: #666; margin: 5px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="qr-container">
+            <div class="product-name">${product.name}</div>
+            <div class="product-id">${product.uniqueProductId || product.blockchainId}</div>
+            <img src="${product.qrCodeUrl}" alt="QR Code" class="qr-code" />
+          </div>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+    setTimeout(() => {
+      printWindow.print()
+    }, 250)
+  }
+
+  async function printBatchQRCodes(batch) {
+    try {
+      // Fetch products for this batch
+      const batchProducts = products.filter(p => p.batchBlockchainId === batch.batchId)
+      if (batchProducts.length === 0) {
+        alert('No products found in this batch')
+        return
+      }
+
+      const printWindow = window.open('', '_blank')
+      const qrGrid = batchProducts.map(p => `
+        <div class="qr-item">
+          <div class="product-name">${p.name}</div>
+          <div class="product-id">${p.uniqueProductId || p.blockchainId}</div>
+          ${p.productNumberInBatch ? `<div class="product-number">Product #${p.productNumberInBatch} of Batch #${batch.manufacturerBatchNumber || batch.batchId}</div>` : ''}
+          <img src="${p.qrCodeUrl}" alt="QR Code" class="qr-code" />
+        </div>
+      `).join('')
+
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Batch QR Codes - Batch #${batch.manufacturerBatchNumber || batch.batchId}</title>
+            <style>
+              @media print {
+                @page { margin: 1cm; }
+                body { font-family: Arial, sans-serif; }
+                .qr-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1cm; }
+                .qr-item { text-align: center; page-break-inside: avoid; border: 1px solid #ddd; padding: 10px; }
+                .qr-code { max-width: 200px; height: auto; margin: 10px auto; }
+                .product-name { font-size: 14px; font-weight: bold; margin: 5px 0; }
+                .product-id { font-size: 10px; color: #666; margin: 3px 0; }
+                .product-number { font-size: 10px; color: #888; margin: 3px 0; }
+              }
+              body { padding: 20px; }
+              .qr-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+              .qr-item { text-align: center; border: 1px solid #ddd; padding: 15px; }
+              .qr-code { max-width: 200px; height: auto; margin: 10px auto; }
+              .product-name { font-size: 14px; font-weight: bold; margin: 5px 0; }
+              .product-id { font-size: 10px; color: #666; margin: 3px 0; }
+              .product-number { font-size: 10px; color: #888; margin: 3px 0; }
+            </style>
+          </head>
+          <body>
+            <h2 style="text-align: center; margin-bottom: 20px;">Batch #${batch.manufacturerBatchNumber || batch.batchId}${batch.manufacturer?.companyName ? ` by ${batch.manufacturer.companyName}` : ''}</h2>
+            <div class="qr-grid">
+              ${qrGrid}
+            </div>
+          </body>
+        </html>
+      `)
+      printWindow.document.close()
+      setTimeout(() => {
+        printWindow.print()
+      }, 250)
+    } catch (e) {
+      alert('Failed to print batch QR codes: ' + e.message)
+    }
+  }
+
   return (
     <Layout>
       <div className="space-y-8">
@@ -234,16 +332,6 @@ export default function ManufacturerDashboard() {
               }`}
             >
               Partnerships
-            </button>
-            <button
-              onClick={() => setActiveTab('qr-access')}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === 'qr-access'
-                  ? 'text-primary border-b-2 border-primary'
-                  : 'text-text-light hover:text-text'
-              }`}
-            >
-              QR Access
             </button>
           </nav>
         </div>
@@ -333,7 +421,14 @@ export default function ManufacturerDashboard() {
                       products.map(p => (
                         <tr key={p._id} className="hover:bg-bg transition-colors">
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{p.uniqueProductId || p.blockchainId}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{p.name}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-text">
+                            {p.name}
+                            {p.productNumberInBatch && p.batchBlockchainId && (
+                              <div className="text-xs text-text-light mt-1">
+                                Product #{p.productNumberInBatch} of Batch #{p.batchBlockchainId}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             {p.batchBlockchainId ? (
                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-bg text-secondary border border-border">
@@ -360,13 +455,12 @@ export default function ManufacturerDashboard() {
                             {p.qrCodeUrl ? (
                               <div className="flex items-center gap-2">
                                 <img src={p.qrCodeUrl} className="w-16 h-16 object-contain" alt="QR Code" />
-                                <a
-                                  href={`/test-qr/${p.blockchainId}`}
-                                  className="text-xs text-primary hover:text-secondary font-medium"
-                                  title="Test QR Code"
+                                <button
+                                  onClick={() => printQRCode(p)}
+                                  className="text-sm text-primary hover:text-secondary font-medium px-3 py-1 border border-border rounded-md hover:bg-bg transition-colors"
                                 >
-                                  Test
-                                </a>
+                                  Print QR
+                                </button>
                               </div>
                             ) : (
                               <span className="text-text-light text-sm">—</span>
@@ -542,24 +636,30 @@ export default function ManufacturerDashboard() {
                 <table className="w-full">
                   <thead className="bg-bg">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Batch ID</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Batch Number</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">NFT Token ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Quantity</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Products</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Actions</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-text-light uppercase tracking-wider">Created</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {batches.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="px-6 py-8 text-center text-text-light">
+                        <td colSpan="6" className="px-6 py-8 text-center text-text-light">
                           No batches yet. Create your first batch above.
                         </td>
                       </tr>
                     ) : (
                       batches.map(batch => (
                         <tr key={batch._id} className="hover:bg-bg transition-colors">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-text">{batch.batchId}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-text font-semibold">
+                            Batch #{batch.manufacturerBatchNumber || batch.batchId}
+                            {batch.manufacturer?.companyName && (
+                              <div className="text-xs text-text-light mt-1">by {batch.manufacturer.companyName}</div>
+                            )}
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-bg text-secondary border border-border">
                               NFT #{batch.nftTokenId}
@@ -567,6 +667,14 @@ export default function ManufacturerDashboard() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text font-semibold">{batch.quantity || batch.products?.length || 0}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text">{batch.products?.length || 0} products</td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <button
+                              onClick={() => printBatchQRCodes(batch)}
+                              className="text-sm text-primary hover:text-secondary font-medium px-3 py-1 border border-border rounded-md hover:bg-bg transition-colors"
+                            >
+                              Print All QR Codes
+                            </button>
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-text-light">
                             {new Date(batch.createdAt).toLocaleDateString()}
                           </td>
@@ -583,11 +691,6 @@ export default function ManufacturerDashboard() {
         {/* Partnerships Tab */}
         {activeTab === 'partnerships' && (
           <PartnershipManager />
-        )}
-
-        {/* QR Access Tab */}
-        {activeTab === 'qr-access' && (
-          <QRAccessManager userRole="manufacturer" />
         )}
       </div>
     </Layout>

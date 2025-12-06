@@ -8,7 +8,6 @@ import WarehouseDashboard from './pages/WarehouseDashboard'
 import RetailerDashboard from './pages/RetailerDashboard'
 import VerifyProduct from './pages/VerifyProduct'
 import TestQRCode from './pages/TestQRCode'
-import './App.css'
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token')

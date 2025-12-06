@@ -7,7 +7,8 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
     walletAddress: { type: String, required: true },
     role: { type: String, enum: ['manufacturer', 'distributor', 'warehouse', 'retailer'], required: true },
-    companyName: { type: String }
+    companyName: { type: String },
+    batchCounter: { type: Number, default: 0 } // Manufacturer-specific batch counter
   },
   { timestamps: true }
 );

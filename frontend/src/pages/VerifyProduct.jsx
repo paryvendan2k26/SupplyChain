@@ -129,7 +129,7 @@ export default function VerifyProduct() {
           </div>
         </div>
 
-        {/* Product Information */}
+        {/* Product Information - PRIVATE MODE: Only show essential info */}
         <div className="bg-surface rounded-lg border border-border p-6 mb-6">
           <h2 className="text-lg font-semibold text-text mb-4">Product Details</h2>
           <div className="space-y-3">
@@ -147,85 +147,13 @@ export default function VerifyProduct() {
               <div className="text-sm text-text-light mb-1">Manufacture Date</div>
               <div className="text-text">{db?.manufactureDate ? new Date(db.manufactureDate).toLocaleDateString() : 'N/A'}</div>
             </div>
-            <div>
-              <div className="text-sm text-text-light mb-1">Blockchain ID</div>
-              <div className="text-text font-mono text-sm">{productId}</div>
-            </div>
-            {db?.manufacturer && (
+            {/* Show verification checkpoints count */}
+            {onchain.history && onchain.history.length > 0 && (
               <div>
-                <div className="text-sm text-text-light mb-1">Manufacturer</div>
-                <div className="text-text">{db.manufacturer.name || db.manufacturer.companyName || 'N/A'}</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Batch Information */}
-        {batch && (
-          <div className="bg-surface rounded-lg border border-border p-6 mb-6">
-            <h2 className="text-lg font-semibold text-text mb-4">Batch Information</h2>
-            <div className="space-y-3">
-              <div>
-                <div className="text-sm text-text-light mb-1">Batch ID</div>
-                <div className="text-text font-mono text-sm">{batch.batchId}</div>
-              </div>
-              <div>
-                <div className="text-sm text-text-light mb-1">NFT Token ID</div>
-                <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-bg text-secondary border border-border">
-                  NFT #{batch.batchId}
+                <div className="text-sm text-text-light mb-1">Verification</div>
+                <div className="text-text">
+                  ✅ Authentic - Verified through {onchain.history.length + 1} checkpoints
                 </div>
-              </div>
-              <div>
-                <div className="text-sm text-text-light mb-1">Products in Batch</div>
-                <div className="text-text">{batch.productIds?.length || 0} products</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Supply Chain Journey */}
-        <div className="bg-surface rounded-lg border border-border p-6 mb-6">
-          <h2 className="text-lg font-semibold text-text mb-4">Supply Chain Journey</h2>
-          {onchain.history && onchain.history.length > 0 ? (
-            <div className="space-y-4">
-              {onchain.history.map((h, idx) => (
-                <div key={idx} className="flex items-start gap-4 pb-4 border-b border-border last:border-0 last:pb-0">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-bg border border-border flex items-center justify-center text-sm font-medium text-secondary">
-                    {idx + 1}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-text">
-                      {h.from.slice(0, 6)}...{h.from.slice(-4)} → {h.to.slice(0, 6)}...{h.to.slice(-4)}
-                    </div>
-                    <div className="text-xs text-text-light mt-1">
-                      {h.location && `${h.location} • `}
-                      {new Date(Number(h.timestamp) * 1000).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-text-light text-sm">No transfer history available</div>
-          )}
-        </div>
-
-        {/* Blockchain Information */}
-        <div className="bg-surface rounded-lg border border-border p-6 mb-6">
-          <h2 className="text-lg font-semibold text-text mb-4">Blockchain Verification</h2>
-          <div className="space-y-3">
-            <div>
-              <div className="text-sm text-text-light mb-1">Manufacturer Address</div>
-              <div className="text-text font-mono text-xs break-all">{onchain.manufacturer}</div>
-            </div>
-            <div>
-              <div className="text-sm text-text-light mb-1">Current Holder</div>
-              <div className="text-text font-mono text-xs break-all">{onchain.currentHolder}</div>
-            </div>
-            {onchain.verifiedByCustomer && (
-              <div>
-                <div className="text-sm text-text-light mb-1">Verified By Customer</div>
-                <div className="text-text font-mono text-xs break-all">{onchain.customer}</div>
               </div>
             )}
           </div>

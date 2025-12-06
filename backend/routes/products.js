@@ -5,6 +5,7 @@ const Product = require('../models/Product');
 const Batch = require('../models/Batch');
 const User = require('../models/User');
 const Partnership = require('../models/Partnership');
+const GlobalCounter = require('../models/GlobalCounter');
 const { ethers } = require('ethers');
 // ZK Proof generation - simplified for now
 // In production, use a proper ZK library and compiled circuits
@@ -153,10 +154,11 @@ async function getEthersBindings(userWalletAddress = null) {
   return { provider, signer, contract };
 }
 
-// Generate unique product ID: MFR_{manufacturerId}_{timestamp}_{counter}
+// Generate unique product ID for single products (not in batch)
+// Format: MFR_{manufacturerId}_{timestamp}_{counter}
 async function generateUniqueProductId(manufacturerId) {
   const timestamp = Math.floor(Date.now() / 1000);
-  const count = await Product.countDocuments({ manufacturer: manufacturerId });
+  const count = await Product.countDocuments({ manufacturer: manufacturerId, batchId: { $exists: false } });
   const counter = String(count + 1).padStart(3, '0');
   return `MFR_${manufacturerId}_${timestamp}_${counter}`;
 }
@@ -231,7 +233,6 @@ router.post('/', auth, async (req, res) => {
         manufactureDate,
         qrCodeUrl,
         requiresPartnership: true, // NEW: Flag new products as requiring partnership
-        qrVisible: false, // NEW: Default false for new products (backward compat: old products have true)
       });
       createdProducts.push(product);
     }
@@ -354,8 +355,8 @@ router.get('/grouped-by-sender', auth, async (req, res) => {
   }
 });
 
-// Get QR code (with access control for new products)
-router.get('/:id/qrcode', async (req, res) => {
+// Get QR code (manufacturer only)
+router.get('/:id/qrcode', auth, async (req, res) => {
   try {
     // Try to find by blockchainId first (backward compatibility)
     let p = await Product.findOne({ blockchainId: req.params.id });
@@ -365,38 +366,14 @@ router.get('/:id/qrcode', async (req, res) => {
     }
     if (!p) return res.status(404).json({ error: 'Not found' });
     
-    // NEW: Check QR access for protected products
-    // If qrVisible is false, check access
-    if (!p.qrVisible) {
-      // Check if user has access (requires auth)
-      const header = req.headers.authorization || '';
-      const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-      
-      if (!token) {
-        return res.status(403).json({ error: 'QR code access not granted. Authentication required.' });
-      }
-      
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findById(decoded.id);
-        
-        // Manufacturer always has access to their products
-        if (user && p.manufacturer.toString() === user._id.toString()) {
-          return res.json({ qrCodeUrl: p.qrCodeUrl });
-        }
-        
-        // Check if user is in qrAccessGrantedTo list
-        if (user && p.qrAccessGrantedTo && p.qrAccessGrantedTo.some(id => id.toString() === user._id.toString())) {
-          return res.json({ qrCodeUrl: p.qrCodeUrl });
-        }
-        
-        return res.status(403).json({ error: 'QR code access not granted' });
-      } catch (e) {
-        return res.status(403).json({ error: 'QR code access not granted. Invalid token.' });
-      }
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    
+    // Only manufacturer can view QR codes
+    if (user.role !== 'manufacturer' || p.manufacturer.toString() !== user._id.toString()) {
+      return res.status(403).json({ error: 'QR codes are only visible to the manufacturer' });
     }
     
-    // Backward compatibility: old products with qrVisible: true (or default) are accessible
     res.json({ qrCodeUrl: p.qrCodeUrl });
   } catch (e) {
     res.status(500).json({ error: e.message || 'Server error' });
@@ -652,6 +629,14 @@ router.post('/batch', auth, async (req, res) => {
     // Get batch ID from event or calculate
     const batchId = Number(await contract.nextBatchId()) - 1;
     
+    // Get globally unique NFT token ID
+    const nftTokenId = await GlobalCounter.getNextCounter('nftTokenId');
+    
+    // Increment manufacturer's batch counter and get manufacturer batch number
+    user.batchCounter = (user.batchCounter || 0) + 1;
+    const manufacturerBatchNumber = user.batchCounter;
+    await user.save();
+    
     // Get product IDs from the batch
     const productIds = await contract.getBatchProductIds(batchId);
     
@@ -659,8 +644,9 @@ router.post('/batch', auth, async (req, res) => {
     const batchDoc = await Batch.create({
       batchId,
       manufacturer: user._id,
+      manufacturerBatchNumber,
       metadataURI: metadataURI || `ipfs://batch-${batchId}`,
-      nftTokenId: batchId, // NFT token ID = batch ID
+      nftTokenId, // Globally unique NFT token ID
     });
 
     // Create product documents in MongoDB and generate ZK proofs (MANDATORY)
@@ -668,6 +654,7 @@ router.post('/batch', auth, async (req, res) => {
     for (let i = 0; i < productList.length; i++) {
       const blockchainId = Number(productIds[i]);
       const product = productList[i];
+      const productNumberInBatch = i + 1; // 1-indexed product number
       const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify/${blockchainId}`;
       const qrCodeUrl = await QRCode.toDataURL(verifyUrl);
 
@@ -675,13 +662,18 @@ router.post('/batch', auth, async (req, res) => {
       const secret = ethers.keccak256(ethers.toUtf8Bytes(`secret-${blockchainId}-${batchId}-${Date.now()}`));
       const proofData = await generateBatchMembershipProof(blockchainId, batchId, secret);
 
+      // Generate unique product ID: MFR_{manufacturerId}_BATCH{batchNumber}_PROD{productNumber}
+      const uniqueProductId = `MFR_${user._id}_BATCH${manufacturerBatchNumber}_PROD${productNumberInBatch}`;
+
       const productDoc = await Product.create({
         blockchainId,
+        uniqueProductId,
         name: product.name,
         description: product.description,
         manufacturer: user._id,
         batchId: batchDoc._id,
         batchBlockchainId: batchId,
+        productNumberInBatch,
         manufactureDate: product.manufactureDate || new Date(),
         qrCodeUrl,
         zkProof: proofData,
@@ -701,7 +693,8 @@ router.post('/batch', auth, async (req, res) => {
       batch: batchDoc,
       products: createdProducts,
       txHash: receipt.transactionHash,
-      nftTokenId: batchId
+      nftTokenId,
+      manufacturerBatchNumber
     });
   } catch (e) {
     console.error('Create batch error:', e);
